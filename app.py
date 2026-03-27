@@ -37,30 +37,29 @@ if data is not None:
     today = datetime(2026, 3, 28)
     selected_date = st.date_input("조회 날짜", value=today, max_value=today)
 
-    if st.button("🚀 AI 분석 및 실측 대조 실행", use_container_width=True):
+    if st.button("🚀 AI 분석 실행", use_container_width=True):
         t_ts, l_rd = pd.Timestamp(selected_date), data['ymd'].max()
         
-        # 2026년 선택 시 2024년 매핑
-        if t_ts > l_rd:
-            try: m_d = pd.Timestamp(year=2024, month=t_ts.month, day=t_ts.day)
-            except: m_d = l_rd
-            if m_d > l_rd: m_d = l_rd
-            history = data[data['ymd'] <= m_d].tail(7)
-        else:
-            history = data[data['ymd'] <= t_ts].tail(7)
+        # 2026년 선택 시 데이터가 있는 마지막 7일 참조
+        history = data.tail(7) if t_ts > l_rd else data[data['ymd'] <= t_ts].tail(7)
 
         if len(history) == 7:
-            # 1. AI 예측 및 역스케일링
+            # 1. AI 예측
             in_v = scaler.transform(history[['rf', 'fw']].values)
             p_raw = model.predict(in_v.reshape(1, 7, 2), verbose=0)
             f_idx = np.argmax(scaler.data_max_)
             dummy = np.zeros((1, 2)); dummy[0, f_idx] = p_raw[0, 0]
             p_val = scaler.inverse_transform(dummy)[0, f_idx]
             
-            # 2. 보정 및 강수량
-            w_rain, l_fw = history['rf'].sum(), history['fw'].iloc[-1]
-            if w_rain < 1.0 and p_val > l_fw * 1.5: p_val = l_fw * 1.1
-
+            # 2. [핵심] 7일 흐름 기반 강제 안정화 (Smoothing)
+            l_fw, avg_fw, w_rain = history['fw'].iloc[-1], history['fw'].mean(), history['rf'].sum()
+            
+            # 비가 안 오면(5mm 미만) 전날 유량의 ±10% 내외로 강제 고정
+            if w_rain < 5.0:
+                upper, lower = l_fw * 1.1, l_fw * 0.85
+                if p_val > upper or p_val < lower:
+                    p_val = (l_fw * 0.8) + (avg_fw * 0.2)
+            
             st.markdown("---")
             st.balloons()
             
