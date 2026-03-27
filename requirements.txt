@@ -1,8 +1,9 @@
 streamlit
-tensorflow-cpu
-keras
+tensorflow-cpu>=2.16.1
+keras>=3.0.0
 pandas
 numpy
 joblib
 requests
 plotly
+scikit-learn
