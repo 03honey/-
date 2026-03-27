@@ -4,3 +4,4 @@ pandas
 numpy
 joblib
 requests
+plotly==6.6.0
