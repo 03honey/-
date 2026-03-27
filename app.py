@@ -46,29 +46,30 @@ with st.sidebar:
     st.metric("평균 오차율 (MAPE)", "7.98%")
     st.metric("결정계수 (R²)", "0.92")
     st.write("---")
-    st.info("💡 과거 데이터를 조회하면 해당 시점의 실시간 오차율을 계산합니다.")
+    st.info("💡 과거 데이터를 조회하면 해당 시점의 오차율을 계산합니다.")
 
 # 4. 메인 탭 구성
 tab1, tab2 = st.tabs(["🚀 데이터 기반 미래 예측", "📈 과거 분석 (MAPE/R 검증)"])
 
-# [탭 1] 미래 예측 (보유 데이터 중 가장 마지막 날 기준)
+# [탭 1] 미래 예측
 with tab1:
     if data is not None:
         last_date = data['ymd'].max()
         target_date = last_date + timedelta(days=3)
         st.subheader(f"📍 보유 데이터 이후 3일 뒤 예측 ({target_date.strftime('%Y-%m-%d')})")
         
-        if st.button("🔮 미래 유량 예측 실행"):
+        if st.button("🔮 미래 유량 예측 실행", key="future_btn"):
             recent_7 = data.tail(7)
             input_data = recent_7[['rf', 'fw']].values
             inputs_scaled = scaler.transform(input_data)
             pred_scaled = model.predict(inputs_scaled.reshape(1, 7, 2))
             
-            dummy = np.zeros((1, 2)); dummy[0, 1] = pred_scaled[0, 0]
+            dummy = np.zeros((1, 2))
+            dummy[0, 1] = pred_scaled[0, 0]
             final_val = scaler.inverse_transform(dummy)[0, 1]
             
             st.balloons()
-            st.success(f"### ✅ {target_date.strftime('%Y-%m-%d')} 예상 유량: **{final_val:.3f} m³/s**")
+            st.success(f"### ✅ {target_date.strftime('%Y-%m-%d')} 예상 유량: **{final_val:.3f}** m³/s")
             
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=recent_7['ymd'], y=recent_7['fw'], name='현재 유량', line=dict(width=3)))
@@ -85,7 +86,7 @@ with tab2:
         max_d = data['ymd'].max() - timedelta(days=3)
         selected_date = st.slider("검증할 날짜 선택", min_value=min_d.to_pydatetime(), max_value=max_d.to_pydatetime(), format="YYYY-MM-DD")
 
-        if st.button("🔎 분석 및 오차 산출"):
+        if st.button("🔎 분석 및 오차 산출", key="test_btn"):
             mask = (data['ymd'] <= pd.Timestamp(selected_date))
             history = data.loc[mask].tail(7)
             prediction_day = pd.Timestamp(selected_date) + timedelta(days=3)
@@ -95,7 +96,8 @@ with tab2:
                 input_data = history[['rf', 'fw']].values
                 inputs_scaled = scaler.transform(input_data)
                 pred_scaled = model.predict(inputs_scaled.reshape(1, 7, 2))
-                dummy = np.zeros((1, 2)); dummy[0, 1] = pred_scaled[0, 0]
+                dummy = np.zeros((1, 2))
+                dummy[0, 1] = pred_scaled[0, 0]
                 pred_val = scaler.inverse_transform(dummy)[0, 1]
                 actual_val = actual_row['fw'].values[0]
                 
@@ -111,4 +113,9 @@ with tab2:
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=history['ymd'], y=history['fw'], name='과거 7일 실측', line=dict(color='blue')))
-                fig.add_trace(go.Scatter(x=[prediction_day], y=[pred_val], name='AI 예측', mode='markers+text', text=["예측"], textposition="top center", marker=dict(size=12,
+                fig.add_trace(go.Scatter(x=[prediction_day], y=[pred_val], name='AI 예측', mode='markers+text', text=["예측"], textposition="top center", marker=dict(size=12, color='red', symbol='star')))
+                fig.add_trace(go.Scatter(x=[prediction_day], y=[actual_val], name='실제 실측', mode='markers', marker=dict(size=12, color='green', symbol='x')))
+                fig.update_layout(title=f"{prediction_day.strftime('%Y-%m-%d')} 검증 (오차율: {mape:.2f}%)", template="plotly_white")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("비교할 실측 데이터가 부족합니다.")
