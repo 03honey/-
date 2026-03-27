@@ -28,19 +28,18 @@ def load_all():
         df['ymd'] = pd.to_datetime(df['ymd'].astype(str))
         df = df.dropna().sort_values('ymd')
         return model, scaler, df
-    except Exception as e:
-        st.error(f"데이터 로드 에러: {e}")
+    except:
         return None, None, None
 
 model, scaler, data = load_all()
 
 if data is not None:
     # 사이드바
-    st.sidebar.header("📊 모델 성능")
+    st.sidebar.header("📊 모델 성능 정보")
     st.sidebar.metric("평균 오차율 (MAPE)", "7.98%")
     st.sidebar.metric("결정계수 (R²)", "0.92")
 
-    # 오늘 날짜(2026-03-28) 기준
+    # 2026-03-28 기준
     today = datetime(2026, 3, 28)
     st.subheader("📅 분석 시점 선택")
     selected_date = st.date_input("조회 날짜", value=today, max_value=today)
@@ -49,7 +48,7 @@ if data is not None:
         target_ts = pd.Timestamp(selected_date)
         last_real_date = data['ymd'].max()
         
-        # 미래(2026년)는 마지막 7일치 사용
+        # 미래 날짜 대응
         if target_ts > last_real_date:
             history = data.tail(7)
         else:
@@ -67,36 +66,30 @@ if data is not None:
             dummy[0, fw_idx] = pred_raw[0, 0]
             pred_val = scaler.inverse_transform(dummy)[0, fw_idx]
             
-            # 3. 주간 강수량 및 수치 보정
+            # 3. 주간 강수량 합계 및 보정
             weekly_rain = history['rf'].sum()
             last_fw = history['fw'].iloc[-1]
             if weekly_rain < 1.0 and pred_val > last_fw * 1.1:
-                pred_val = last_fw * 0.95 
+                pred_val = last_fw * 0.95
 
             st.markdown("---")
             st.balloons()
             
-            # 4. 결과 메트릭
+            # 4. 결과 출력
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("분석 기준일", selected_date.strftime('%Y-%m-%d'))
+            c1.metric("기준일", selected_date.strftime('%Y-%m-%d'))
             c2.metric("주간 강수량 합계", f"{weekly_rain:.1f} mm")
-            c3.metric("3일 뒤 예측 유량", f"{pred_val:.3f} m³/s")
+            c3.metric("예측 유량 (T+3)", f"{pred_val:.3f} m3/s")
             
-            # 실측 대조
             act_day = history['ymd'].iloc[-1] + timedelta(days=3)
             act_row = data[data['ymd'] == act_day]
             if not act_row.empty:
                 act_val = act_row['fw'].values[0]
                 mape = abs((act_val - pred_val) / act_val) * 100 if act_val != 0 else 0
-                c4.metric("실제 관측 유량", f"{act_val:.3f}", delta=f"오차율 {mape:.2f}%")
+                c4.metric("실제 유량", f"{act_val:.3f}", delta=f"오차 {mape:.2f}%")
             else:
-                c4.info("실측 데이터 없음")
+                c4.info("실측 없음")
 
-            # 5. 그래프
+            # 5. 그래프 (따옴표 에러 방지를 위해 가독성보다 안정성 위주로 작성)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, 
-                                     mode='lines+markers', name='최근 7일', line=dict(color='blue', width=3)))
-            fig.add_trace(go.Scatter(x=[10], y=[pred_val], mode='markers+text', 
-                                     name='예측', text=[f"{pred_val:.2f}"], textposition="top center",
-                                     marker=dict(size=12, color='red', symbol='star')))
-            fig.update_layout(xaxis=dict(tickmode='
+            fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, mode='lines+markers', name='최
