@@ -28,8 +28,11 @@ def load_all():
         # 숫자 변환
         r_df['rf'] = pd.to_numeric(r_df['rf'], errors='coerce')
         f_df['fw'] = pd.to_numeric(f_df['fw'], errors='coerce')
-        f_df['wl'] = pd.to_numeric(f_df['wl'], errors='coerce')
-        
+        if 'wl' in f_df.columns:
+            f_df['wl'] = pd.to_numeric(f_df['wl'], errors='coerce')
+        else:
+            f_df['wl'] = 0.0
+            
         df = pd.merge(r_df[['ymd', 'rf']], f_df[['ymd', 'fw', 'wl']], on='ymd')
         df['ymd'] = pd.to_datetime(df['ymd'].astype(str))
         df = df.dropna().sort_values('ymd')
@@ -41,11 +44,10 @@ model, scaler, data = load_all()
 
 # --- 메인 로직 시작 ---
 if data is not None:
-    # 데이터의 마지막 날짜 (2024년 2월 경)
     last_real_date = data['ymd'].max()
     today = datetime(2026, 3, 28) # 오늘 기준
 
-    # 3. 장기 예측 함수 (24년 데이터를 재료로 오늘까지 생성)
+    # 3. 장기 예측 함수
     @st.cache_data
     def get_long_term_prediction(_model, _scaler, _base_data, target_date):
         current_df = _base_data.copy()
@@ -59,7 +61,6 @@ if data is not None:
             pred_fw = _scaler.inverse_transform(dummy)[0, 1]
             
             next_date = current_df['ymd'].max() + timedelta(days=3)
-            # 수위(wl)는 유량(fw)에 비례한다고 가정 (단순 시각화용)
             new_row = pd.DataFrame({'ymd': [next_date], 'rf': [0.0], 'fw': [pred_fw], 'wl': [pred_fw*0.15]})
             current_df = pd.concat([current_df, new_row], ignore_index=True)
         return current_df
@@ -75,4 +76,8 @@ if data is not None:
 
     # [섹션 1: 수문 현황]
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("현재 유량 (예측)", f"{latest_info['fw']:.
+    # ⚠️ f-string 오타 수정 완료
+    m1.metric("현재 유량 (예측)", f"{latest_info['fw']:.2f} m³/s", f"{latest_info['fw'] - prev_info['fw']:+.2f}")
+    m2.metric("현재 수위 (추정)", f"{latest_info['wl']:.2f} m")
+    m3.metric("최근 7일 강우", "0.0 mm")
+    m4.metric("분석 창(Window)", "1
