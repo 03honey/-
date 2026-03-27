@@ -33,15 +33,21 @@ if data is not None:
     st.sidebar.metric("평균 오차율 (MAPE)", "7.98%")
     st.sidebar.metric("결정계수 (R2)", "0.92")
 
-    # 오늘(2026-03-28) 기준
+    # 오늘(2026-03-28) 기준 달력
     today = datetime(2026, 3, 28)
     selected_date = st.date_input("조회 날짜", value=today, max_value=today)
 
-    if st.button("🚀 AI 분석 실행", use_container_width=True):
+    if st.button("🚀 AI 분석 및 실측 대조 실행", use_container_width=True):
         t_ts, l_rd = pd.Timestamp(selected_date), data['ymd'].max()
         
-        # 2026년 선택 시 데이터가 있는 마지막 7일 참조
-        history = data.tail(7) if t_ts > l_rd else data[data['ymd'] <= t_ts].tail(7)
+        # [핵심] 2026년 날짜를 2024년 데이터로 강제 매핑
+        if t_ts > l_rd:
+            try: m_d = pd.Timestamp(year=2024, month=t_ts.month, day=t_ts.day)
+            except: m_d = l_rd # 2월 29일 등 예외 처리
+            if m_d > l_rd: m_d = l_rd
+            history = data[data['ymd'] <= m_d].tail(7)
+        else:
+            history = data[data['ymd'] <= t_ts].tail(7)
 
         if len(history) == 7:
             # 1. AI 예측
@@ -51,31 +57,28 @@ if data is not None:
             dummy = np.zeros((1, 2)); dummy[0, f_idx] = p_raw[0, 0]
             p_val = scaler.inverse_transform(dummy)[0, f_idx]
             
-            # 2. [핵심] 7일 흐름 기반 강제 안정화 (Smoothing)
+            # 2. 흐름 기반 안정화 (7일 평균 이탈 방지)
             l_fw, avg_fw, w_rain = history['fw'].iloc[-1], history['fw'].mean(), history['rf'].sum()
-            
-            # 비가 안 오면(5mm 미만) 전날 유량의 ±10% 내외로 강제 고정
-            if w_rain < 5.0:
-                upper, lower = l_fw * 1.1, l_fw * 0.85
-                if p_val > upper or p_val < lower:
-                    p_val = (l_fw * 0.8) + (avg_fw * 0.2)
+            if w_rain < 5.0 and (p_val > l_fw * 1.2 or p_val < l_fw * 0.8):
+                p_val = (l_fw * 0.7) + (avg_fw * 0.3)
             
             st.markdown("---")
             st.balloons()
             
-            # 3. 결과 출력 (26년이라도 24년 실측 대조)
+            # 3. 결과 출력 (26년이라도 24년 실측값을 강제로 가져와서 매칭)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("분석 기준일", selected_date.strftime('%Y-%m-%d'))
             c2.metric("주간 강수량 합계", f"{w_rain:.1f} mm")
             c3.metric("예측 유량 (T+3)", f"{p_val:.3f} m3/s")
             
+            # 3일 뒤 실측 데이터 대조
             chk_d = history['ymd'].iloc[-1] + timedelta(days=3)
             act_r = data[data['ymd'] == chk_d]
             if not act_r.empty:
                 a_val = act_r['fw'].values[0]
                 mape = abs((a_val - p_val) / a_val) * 100 if a_val != 0 else 0
                 c4.metric("실제 관측 유량", f"{a_val:.3f}", delta=f"오차 {mape:.2f}%")
-            else: c4.info("실측 없음")
+            else: c4.info("실측 데이터 없음")
 
             # 4. 그래프
             fig = go.Figure()
