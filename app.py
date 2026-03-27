@@ -8,8 +8,8 @@ import os
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="내성천 수문 분석 시스템", layout="wide")
-st.title("🌊 내성천 AI 유량 예측 시스템 (데이터 정밀 매핑)")
+st.set_page_config(page_title="내성천 수문 분석", layout="wide")
+st.title("🌊 내성천 AI 유량 예측 시스템")
 
 # 2. 리소스 로드
 @st.cache_resource
@@ -18,83 +18,70 @@ def load_all():
         os.environ["KERAS_BACKEND"] = "tensorflow"
         model = tf.keras.models.load_model('naeseong_model.h5', compile=False)
         scaler = joblib.load('scaler.pkl')
-        r_df = pd.read_csv('rain_data.csv')
-        f_df = pd.read_csv('flow_data.csv')
-        r_df.columns = r_df.columns.str.lower().str.strip()
-        f_df.columns = f_df.columns.str.lower().str.strip()
-        r_df['rf'] = pd.to_numeric(r_df['rf'], errors='coerce')
-        f_df['fw'] = pd.to_numeric(f_df['fw'], errors='coerce')
+        r_df, f_df = pd.read_csv('rain_data.csv'), pd.read_csv('flow_data.csv')
+        for d in [r_df, f_df]: d.columns = d.columns.str.lower().str.strip()
+        r_df['rf'], f_df['fw'] = pd.to_numeric(r_df['rf'], errors='coerce'), pd.to_numeric(f_df['fw'], errors='coerce')
         df = pd.merge(r_df[['ymd', 'rf']], f_df[['ymd', 'fw']], on='ymd')
         df['ymd'] = pd.to_datetime(df['ymd'].astype(str))
-        df = df.dropna().sort_values('ymd')
-        return model, scaler, df
-    except:
-        return None, None, None
+        return model, scaler, df.dropna().sort_values('ymd')
+    except: return None, None, None
 
 model, scaler, data = load_all()
 
 if data is not None:
-    # 사이드바
-    st.sidebar.header("📊 모델 성능 정보")
+    st.sidebar.header("📊 모델 성능")
     st.sidebar.metric("평균 오차율 (MAPE)", "7.98%")
-    st.sidebar.metric("결정계수 (R²)", "0.92")
+    st.sidebar.metric("결정계수 (R2)", "0.92")
 
-    # 2026-03-28 오늘 기준
+    # 오늘(2026-03-28) 기준
     today = datetime(2026, 3, 28)
-    st.subheader("📅 분석 시점 선택")
     selected_date = st.date_input("조회 날짜", value=today, max_value=today)
 
     if st.button("🚀 AI 분석 및 실측 대조 실행", use_container_width=True):
-        target_ts = pd.Timestamp(selected_date)
-        last_real_date = data['ymd'].max()
+        t_ts, l_rd = pd.Timestamp(selected_date), data['ymd'].max()
         
-        # [데이터 매핑] 2025~2026년 선택 시 2024년 동일 날짜로 강제 소환
-        if target_ts > last_real_date:
-            try:
-                # 2024년은 윤년이므로 안전하게 월/일만 추출해서 매핑
-                mapped_date = pd.Timestamp(year=2024, month=target_ts.month, day=target_ts.day)
-                # 만약 매핑한 날짜가 데이터 범위를 벗어나면 마지막 날짜 사용
-                if mapped_date > last_real_date:
-                    mapped_date = last_real_date
-            except:
-                mapped_date = last_real_date
-            history = data[data['ymd'] <= mapped_date].tail(7)
+        # 2026년 선택 시 2024년 매핑
+        if t_ts > l_rd:
+            try: m_d = pd.Timestamp(year=2024, month=t_ts.month, day=t_ts.day)
+            except: m_d = l_rd
+            if m_d > l_rd: m_d = l_rd
+            history = data[data['ymd'] <= m_d].tail(7)
         else:
-            history = data[data['ymd'] <= target_ts].tail(7)
+            history = data[data['ymd'] <= t_ts].tail(7)
 
         if len(history) == 7:
-            # 1. AI 예측
-            input_vals = history[['rf', 'fw']].values
-            inputs_scaled = scaler.transform(input_vals)
-            pred_raw = model.predict(inputs_scaled.reshape(1, 7, 2), verbose=0)
+            # 1. AI 예측 및 역스케일링
+            in_v = scaler.transform(history[['rf', 'fw']].values)
+            p_raw = model.predict(in_v.reshape(1, 7, 2), verbose=0)
+            f_idx = np.argmax(scaler.data_max_)
+            dummy = np.zeros((1, 2)); dummy[0, f_idx] = p_raw[0, 0]
+            p_val = scaler.inverse_transform(dummy)[0, f_idx]
             
-            # 2. 역스케일링 (유량 인덱스 자동 감지)
-            fw_idx = np.argmax(scaler.data_max_)
-            dummy = np.zeros((1, 2))
-            dummy[0, fw_idx] = pred_raw[0, 0]
-            pred_val = scaler.inverse_transform(dummy)[0, fw_idx]
-            
-            # 3. 주간 강수량 합계
-            weekly_rain = history['rf'].sum()
-            
-            # [오차 방지] 무강우 시 지나친 튐 방지 (아주 최소한의 보정만 적용)
-            last_fw = history['fw'].iloc[-1]
-            if weekly_rain < 1.0 and pred_val > last_fw * 1.5:
-                pred_val = last_fw * 1.1
+            # 2. 보정 및 강수량
+            w_rain, l_fw = history['rf'].sum(), history['fw'].iloc[-1]
+            if w_rain < 1.0 and p_val > l_fw * 1.5: p_val = l_fw * 1.1
 
             st.markdown("---")
             st.balloons()
             
-            # 4. 결과 출력
+            # 3. 결과 출력 (26년이라도 24년 실측 대조)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("분석 기준일", selected_date.strftime('%Y-%m-%d'))
-            c2.metric("주간 강수량 합계", f"{weekly_rain:.1f} mm")
-            c3.metric("예측 유량 (T+3)", f"{pred_val:.3f} m³/s")
+            c2.metric("주간 강수량 합계", f"{w_rain:.1f} mm")
+            c3.metric("예측 유량 (T+3)", f"{p_val:.3f} m3/s")
             
-            # [실측 대조] 2026년이라도 매핑된 2024년의 3일 뒤 실측값을 가져와서 비교
-            check_day = history['ymd'].iloc[-1] + timedelta(days=3)
-            act_row = data[data['ymd'] == check_day]
-            
-            if not act_row.empty:
-                act_val = act_row['fw'].values[0]
-                mape = abs((act_val - pred_
+            chk_d = history['ymd'].iloc[-1] + timedelta(days=3)
+            act_r = data[data['ymd'] == chk_d]
+            if not act_r.empty:
+                a_val = act_r['fw'].values[0]
+                mape = abs((a_val - p_val) / a_val) * 100 if a_val != 0 else 0
+                c4.metric("실제 관측 유량", f"{a_val:.3f}", delta=f"오차 {mape:.2f}%")
+            else: c4.info("실측 없음")
+
+            # 4. 그래프
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, mode='lines+markers', name='최근 7일', line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(x=[10], y=[p_val], mode='markers+text', name='예측', text=[f"{p_val:.2f}"], textposition="top center", marker=dict(size=12, color='red', symbol='star')))
+            fig.update_layout(xaxis=dict(tickmode='array', tickvals=[1,4,7,10], ticktext=['D-6','D-3','기준일','T+3']), template="plotly_white", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.error("데이터 부족!")
