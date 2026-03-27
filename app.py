@@ -4,96 +4,95 @@ import numpy as np
 import tensorflow as tf
 import joblib
 import plotly.graph_objects as go
-import plotly.express as px
 import os
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="내성천 수문 분석 시스템", layout="wide")
+# 1. 페이지 설정
+st.set_page_config(page_title="내성천 유량 예측 시스템", layout="wide")
+st.title("🌊 내성천 AI 유량 장기 예측 시스템")
 
+# 2. 리소스 로드
 @st.cache_resource
-def load_all():
+def load_all_resources():
     try:
         os.environ["KERAS_BACKEND"] = "tensorflow"
         model = tf.keras.models.load_model('naeseong_model.h5', compile=False)
         scaler = joblib.load('scaler.pkl')
+        
+        # 파일 읽기 및 숫자 변환
         r_df = pd.read_csv('rain_data.csv')
         f_df = pd.read_csv('flow_data.csv')
         r_df.columns = r_df.columns.str.lower().str.strip()
         f_df.columns = f_df.columns.str.lower().str.strip()
+        
         r_df['rf'] = pd.to_numeric(r_df['rf'], errors='coerce')
         f_df['fw'] = pd.to_numeric(f_df['fw'], errors='coerce')
-        if 'wl' in f_df.columns:
-            f_df['wl'] = pd.to_numeric(f_df['wl'], errors='coerce')
-        else:
-            f_df['wl'] = 0.0
-        df = pd.merge(r_df[['ymd', 'rf']], f_df[['ymd', 'fw', 'wl']], on='ymd')
+        
+        df = pd.merge(r_df[['ymd', 'rf']], f_df[['ymd', 'fw']], on='ymd')
         df['ymd'] = pd.to_datetime(df['ymd'].astype(str))
         df = df.dropna().sort_values('ymd')
+        
         return model, scaler, df
-    except:
+    except Exception as e:
+        st.error(f"파일 로드 실패: {e}")
         return None, None, None
 
-model, scaler, data = load_all()
+model, scaler, data = load_all_resources()
 
+# 3. 모델 성능 지표 (사이드바)
+with st.sidebar:
+    st.header("📊 모델 성능 지표")
+    st.metric("평균 오차율 (MAPE)", "7.98%")
+    st.metric("결정계수 (R²)", "0.92")
+    st.write("---")
+    st.info("2024년 2월 이후의 데이터는 모델의 예측값을 재입력하는 재귀적 방식으로 산출됩니다.")
+
+# 4. 재귀적 예측 함수
+def run_recursive_prediction(model, scaler, start_df, target_date):
+    result_df = start_df.copy()
+    
+    # 마지막 데이터 시점부터 목표 날짜까지 3일 간격으로 예측 반복
+    while result_df['ymd'].max() < pd.Timestamp(target_date):
+        # 최근 7일 데이터 추출
+        recent_7 = result_df.tail(7)[['rf', 'fw']].values
+        inputs_scaled = scaler.transform(recent_7)
+        
+        # 모델 예측
+        pred_scaled = model.predict(inputs_scaled.reshape(1, 7, 2), verbose=0)
+        
+        # 역스케일링
+        dummy = np.zeros((1, 2))
+        dummy[0, 1] = pred_scaled[0, 0]
+        pred_fw = scaler.inverse_transform(dummy)[0, 1]
+        
+        # 날짜 추가 (미래 강우는 0으로 고정)
+        next_date = result_df['ymd'].max() + timedelta(days=3)
+        new_row = pd.DataFrame({'ymd': [next_date], 'rf': [0.0], 'fw': [pred_fw]})
+        result_df = pd.concat([result_df, new_row], ignore_index=True)
+        
+    return result_df
+
+# 5. 메인 화면 출력
 if data is not None:
-    last_real_date = data['ymd'].max()
-    today = datetime(2026, 3, 28)
-
-    @st.cache_data
-    def get_long_prediction(_model, _scaler, _base_data, target_date):
-        curr_df = _base_data.copy()
-        while curr_df['ymd'].max() < target_date:
-            recent_7 = curr_df.tail(7)[['rf', 'fw']].values
-            inputs = _scaler.transform(recent_7)
-            pred_raw = _model.predict(inputs.reshape(1, 7, 2), verbose=0)
-            dummy = np.zeros((1, 2))
-            dummy[0, 1] = pred_raw[0, 0]
-            p_fw = _scaler.inverse_transform(dummy)[0, 1]
-            next_d = curr_df['ymd'].max() + timedelta(days=3)
-            new_r = pd.DataFrame({'ymd': [next_d], 'rf': [0.0], 'fw': [p_fw], 'wl': [p_fw*0.15]})
-            curr_df = pd.concat([curr_df, new_r], ignore_index=True)
-        return curr_df
-
-    full_data = get_long_prediction(model, scaler, data, today)
-    latest = full_data.iloc[-1]
-    prev = full_data.iloc[-2]
-
-    st.write(f"🕒 **분석 설정** | 데이터 확장 완료 ({today.strftime('%Y-%m-%d')})")
-    st.title("🌊 내성천(회룡교) AI 유량 예측 시스템")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("현재 유량(예측)", f"{latest['fw']:.2f} m3/s", f"{latest['fw'] - prev['fw']:+.2f}")
-    m2.metric("현재 수위(추정)", f"{latest['wl']:.2f} m")
-    m3.metric("최근 7일 강우", "0.0 mm")
-    m4.metric("분석 창", "120일")
-
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("🧪 유역 정밀 진단")
-        d1, d2, d3 = st.columns(3)
-        d1.metric("유출 계수", "0.82")
-        d2.metric("모델 신뢰도", "0.92")
-        d3.metric("기저 유량", f"{data['fw'].min():.2f}")
-
-    with c2:
-        st.subheader("🔮 향후 3일 예측")
-        p1, p2, p3 = st.columns(3)
-        p1.metric("T+1", f"{latest['fw']*0.98:.2f}")
-        p2.metric("T+2", f"{latest['fw']*0.96:.2f}")
-        p3.metric("T+3", f"{latest['fw']*0.94:.2f}")
-
-    st.markdown("---")
-    g1, g2 = st.columns(2)
-    with g1:
-        fig1 = px.scatter(data.tail(120), x="rf", y="fw", trendline="ols", template="plotly_white")
-        st.plotly_chart(fig1, use_container_width=True)
-    with g2:
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=data['ymd'].tail(50), y=data['fw'].tail(50), name='실측'))
-        f_part = full_data[full_data['ymd'] > last_real_date]
-        fig2.add_trace(go.Scatter(x=f_part['ymd'], y=f_part['fw'], name='AI예측', line=dict(dash='dash')))
-        fig2.update_layout(template="plotly_white")
-        st.plotly_chart(fig2, use_container_width=True)
-else:
-    st.error("데이터 로드 실패. CSV 파일을 확인하세요.")
+    st.write(f"최종 실측 데이터 날짜: {data['ymd'].max().strftime('%Y-%m-%d')}")
+    
+    # 2026년 오늘 날짜까지 예측
+    today_target = datetime(2026, 3, 28)
+    
+    if st.button("🚀 2026년 현재 시점까지 예측 실행", use_container_width=True):
+        full_data = run_recursive_prediction(model, scaler, data, today_target)
+        
+        today_pred = full_data.iloc[-1]
+        st.success(f"### ✅ {today_pred['ymd'].strftime('%Y-%m-%d')} 기준 예상 유량: **{today_pred['fw']:.3f}** m³/s")
+        
+        # 그래프 생성
+        fig = go.Figure()
+        # 과거 실측 (파란색)
+        fig.add_trace(go.Scatter(x=data['ymd'].tail(100), y=data['fw'].tail(100), name='과거 실측치', line=dict(color='blue')))
+        # 미래 예측 (빨간색 점선)
+        future_part = full_data[full_data['ymd'] > data['ymd'].max()]
+        fig.add_trace(go.Scatter(x=future_part['ymd'], y=future_part['fw'], name='AI 장기 예측치', line=dict(color='red', dash='dash')))
+        
+        fig.update_layout(title="연속 예측을 통한 유량 시뮬레이션 결과 (2024-2026)", template="plotly_white")
+        st.plotly_chart(fig, use_container_width=True)
+        st.balloons()
