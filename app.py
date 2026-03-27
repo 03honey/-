@@ -92,4 +92,11 @@ if data is not None:
 
             # 5. 그래프 (따옴표 에러 방지를 위해 가독성보다 안정성 위주로 작성)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, mode='lines+markers', name='최
+            fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, mode='lines+markers', name='최근 7일', line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(x=[10], y=[pred_val], mode='markers+text', name='예측', text=[f"{pred_val:.2f}"], textposition="top center", marker=dict(size=12, color='red', symbol='star')))
+            fig.update_layout(xaxis=dict(tickmode='array', tickvals=[1,4,7,10], ticktext=['D-6','D-3','기준일','T+3']), template="plotly_white", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("데이터 부족!")
+else:
+    st.error("파일 로드 실패!")
