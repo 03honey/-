@@ -48,7 +48,7 @@ if data is not None:
         target_ts = pd.Timestamp(selected_date)
         last_real_date = data['ymd'].max()
         
-        # 2026년 오늘 날짜 대응 (데이터가 없는 구간은 2024년 패턴 매핑)
+        # 2026년 대응 데이터 매핑
         if target_ts > last_real_date:
             try: s_date = datetime(2024, target_ts.month, target_ts.day)
             except: s_date = datetime(2024, 2, 28)
@@ -62,42 +62,45 @@ if data is not None:
             inputs_scaled = scaler.transform(input_vals)
             pred_raw = model.predict(inputs_scaled.reshape(1, 7, 2), verbose=0)
             
-            # 2. 역스케일링 및 인덱스 보정
+            # 2. 역스케일링
             fw_idx = np.argmax(scaler.data_max_)
             dummy = np.zeros((1, 2))
             dummy[0, fw_idx] = pred_raw[0, 0]
             pred_val = scaler.inverse_transform(dummy)[0, fw_idx]
             
-            # 3. 수치 안정화 (Smoothing)
+            # 3. 데이터 집계 (주간 강수량 포함)
             last_fw = history['fw'].iloc[-1]
             avg_fw = history['fw'].mean()
-            recent_rain = history['rf'].sum()
+            weekly_rain_sum = history['rf'].sum() # 최근 7일 강수량 합계
             
-            # 물리적 한계치 적용 (급격한 수치 변동 억제)
-            if recent_rain < 5.0:
-                if pred_val > last_fw * 1.15: # 강우가 적을 때 15% 이상 상승 제한
+            # 수치 안정화 (Smoothing)
+            if weekly_rain_sum < 5.0:
+                if pred_val > last_fw * 1.15:
                     pred_val = (last_fw * 0.8) + (avg_fw * 0.2)
-            elif pred_val > last_fw * 2.5: # 폭우 시에도 2.5배 이상 튀는 것 방지
+            elif pred_val > last_fw * 2.5:
                 pred_val = last_fw * 1.5
 
             st.markdown("---")
             st.balloons()
             
-            c1, c2, c3 = st.columns(3)
+            # 메트릭 레이아웃 (강수량 합계 추가)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("선택일", selected_date.strftime('%Y-%m-%d'))
-            c2.metric("3일 뒤 예측 유량", f"{pred_val:.3f} m³/s")
+            c2.metric("주간 강수량 합계", f"{weekly_rain_sum:.1f} mm")
+            c3.metric("3일 뒤 예측 유량", f"{pred_val:.3f} m³/s")
             
-            # 실측 대조 (과거 데이터 한정)
+            # 실측 대조
             act_day = history['ymd'].iloc[-1] + timedelta(days=3)
             act_row = data[data['ymd'] == act_day]
             if not act_row.empty:
                 act_val = act_row['fw'].values[0]
                 mape = abs((act_val - pred_val) / act_val) * 100 if act_val != 0 else 0
-                c3.metric("실제 관측 유량", f"{act_val:.3f}", delta=f"오차율: {mape:.2f}%", delta_color="inverse")
+                c4.metric("실제 관측 유량", f"{act_val:.3f}", delta=f"오차율: {mape:.2f}%", delta_color="inverse")
             else:
-                c3.info("실측 데이터 없음 (미래)")
+                c4.info("실측 데이터 없음")
 
             # 4. 그래프 출력
+            st.subheader(f"📈 {selected_date} 기준 유량 추이 및 예측")
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=list(range(1, 8)), y=history['fw'].values, 
                                      mode='lines+markers', name='최근 7일 실측', line=dict(color='#1f77b4', width=3)))
@@ -105,8 +108,10 @@ if data is not None:
                                      name='AI 예측(T+3)', text=[f"{pred_val:.2f}"], textposition="top center",
                                      marker=dict(size=12, color='red', symbol='star')))
             fig.update_layout(xaxis=dict(tickmode='array', tickvals=[1,4,7,10], ticktext=['D-6','D-3','기준일','T+3']),
-                              template="plotly_white", height=400)
+                              yaxis=dict(title="유량 (m³/s)"), template="plotly_white", height=400)
             st.plotly_chart(fig, use_container_width=True)
+            
+            st.caption(f"💡 정보: 기준일 이전 7일간의 총 강수량은 {weekly_rain_sum:.1f}mm 입니다.")
         else:
             st.error("데이터가 부족합니다.")
 else:
